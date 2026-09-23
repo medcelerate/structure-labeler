@@ -1,0 +1,703 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Structure Labeler</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1c2027; --panel2: #232833; --line: #2f3742;
+    --text: #e7ebf0; --muted: #97a0ad; --accent: #5a96f0; --accent2: #f0b45a;
+    --ok: #57c98a; --warn: #e08b6b;
+    /* Section label colors (index-aligned with VOCAB) */
+    --c-intro: #6b7280; --c-verse: #3b82f6; --c-prechorus: #8b5cf6;
+    --c-chorus: #ef4444; --c-bridge: #14b8a6; --c-instrumental: #f59e0b;
+    --c-breakdown: #64748b; --c-outro: #78716c; --c-blank: #2a2f38;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font-size: 14px; display: flex; flex-direction: column; }
+
+  header {
+    display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap;
+  }
+  header h1 { font-size: 15px; font-weight: 600; margin: 0 8px 0 0; letter-spacing: .3px; }
+  header .spacer { flex: 1; }
+  button, select, label.file {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer;
+  }
+  button:hover, label.file:hover { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #0b1220; font-weight: 600; }
+  button.ghost { background: transparent; }
+  input[type=file] { display: none; }
+  .queue { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  .queue b { color: var(--text); }
+
+  main { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px 16px; gap: 12px; overflow: auto; }
+
+  .trackbar { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .trackbar .name { font-size: 15px; font-weight: 600; }
+  .trackbar .meta { color: var(--muted); font-size: 12px; }
+
+  .wavewrap { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 220px; cursor: crosshair; }
+  .hint { position: absolute; top: 8px; right: 10px; color: var(--muted); font-size: 11px; pointer-events: none; }
+  .scroll { position: relative; height: 12px; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; }
+  .scroll .thumb { position: absolute; top: 1px; bottom: 1px; left: 0; width: 100%; background: #3a4656; border-radius: 5px; cursor: grab; }
+  .scroll .thumb:active { cursor: grabbing; background: var(--accent); }
+  .chk { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); border: none; padding: 0; background: none; cursor: default; }
+  .empty { display: flex; align-items: center; justify-content: center; height: 260px; color: var(--muted); text-align: center; padding: 24px; border: 1px dashed var(--line); border-radius: 8px; }
+  .empty.drag { border-color: var(--accent); color: var(--text); background: #1a2330; }
+
+  .controls { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .controls .grp { display: flex; align-items: center; gap: 8px; }
+  .controls input[type=range] { width: 150px; }
+  .time { font-variant-numeric: tabular-nums; color: var(--muted); }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  tr.cur td { background: #1a2330; }
+  td.sw { width: 8px; padding: 0; }
+  td.sw span { display: block; width: 8px; height: 22px; border-radius: 2px; }
+  select.lab { min-width: 130px; }
+  td .link { color: var(--accent); cursor: pointer; }
+  td .del { color: var(--warn); cursor: pointer; }
+
+  footer { padding: 8px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; background: var(--panel); }
+  kbd { background: var(--panel2); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 1px 5px; font-size: 11px; color: var(--text); }
+  .status { color: var(--ok); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Structure Labeler</h1>
+  <label class="file">Add tracks…<input id="fileInput" type="file" accept="audio/*" multiple></label>
+  <label class="file ghost">Import A1 JSON…<input id="jsonInput" type="file" accept=".json,application/json"></label>
+  <div class="queue" id="queue"></div>
+  <div class="spacer"></div>
+  <button id="prevBtn" class="ghost">◀ Prev</button>
+  <button id="nextBtn" class="ghost">Next ▶</button>
+  <button id="saveBtn" class="primary">Save JSON</button>
+  <button id="copyBtn" class="ghost">Copy</button>
+</header>
+
+<main id="main">
+  <div id="empty" class="empty">Drop audio files anywhere, or use <b>&nbsp;Add tracks…&nbsp;</b> — energy-based boundaries are proposed automatically, then drag &amp; label them.</div>
+
+  <div id="editor" hidden>
+    <div class="trackbar">
+      <span class="name" id="trackName">—</span>
+      <span class="meta" id="trackMeta"></span>
+      <span class="meta status" id="statusMsg"></span>
+    </div>
+
+    <div class="wavewrap">
+      <canvas id="wave"></canvas>
+      <div class="hint">wheel: zoom · shift-wheel: pan · click: seek · dbl-click: add · drag line: move · right-click line: delete</div>
+    </div>
+    <div id="scrollTrack" class="scroll"><div id="scrollThumb" class="thumb"></div></div>
+
+    <div class="controls">
+      <div class="grp">
+        <button id="playBtn">▶ Play</button>
+        <span class="time" id="clock">0:00 / 0:00</span>
+      </div>
+      <div class="grp">
+        <button id="zoomOutBtn" class="ghost" title="Zoom out (−)">−</button>
+        <button id="zoomInBtn" class="ghost" title="Zoom in (+)">+</button>
+        <button id="fitBtn" class="ghost" title="Fit whole track (F)">Fit</button>
+        <label class="chk"><input id="followChk" type="checkbox" checked> follow</label>
+      </div>
+      <div class="grp">
+        <label for="sens">Sensitivity</label>
+        <input id="sens" type="range" min="1" max="12" step="0.5" value="5">
+        <button id="reproposeBtn" class="ghost">Re-propose from energy</button>
+      </div>
+      <div class="grp">
+        <button id="clearBtn" class="ghost">Clear boundaries</button>
+      </div>
+    </div>
+
+    <table>
+      <thead>
+        <tr><th class="sw"></th><th>#</th><th>Start</th><th>End</th><th>Dur</th><th>Label</th><th></th></tr>
+      </thead>
+      <tbody id="segBody"></tbody>
+    </table>
+  </div>
+</main>
+
+<footer>
+  <kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> seek 2s · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>F</kbd> fit · <kbd>B</kbd> add boundary · <kbd>1</kbd>–<kbd>8</kbd> label at playhead · <kbd>Del</kbd> remove nearest boundary · <kbd>[</kbd>/<kbd>]</kbd> prev/next track
+</footer>
+
+<audio id="audio"></audio>
+
+<script>
+"use strict";
+
+// Our 8-way vocabulary — must match Rust SectionLabel::VOCAB and labels.py.
+const VOCAB = ["intro","verse","prechorus","chorus","bridge","instrumental","breakdown","outro"];
+const LABEL_COLOR = {
+  "": "var(--c-blank)", intro:"var(--c-intro)", verse:"var(--c-verse)", prechorus:"var(--c-prechorus)",
+  chorus:"var(--c-chorus)", bridge:"var(--c-bridge)", instrumental:"var(--c-instrumental)",
+  breakdown:"var(--c-breakdown)", outro:"var(--c-outro)"
+};
+// All-In-One / Harmonix aliases -> our vocab (subset of labels.py, for JSON import).
+const ALIAS = {
+  intro:"intro",start:"intro","fade-in":"intro",fadein:"intro",head:"intro",
+  verse:"verse",rap:"verse",stanza:"verse",theme:"verse",
+  prechorus:"prechorus","pre-chorus":"prechorus",preverse:"prechorus",build:"prechorus",buildup:"prechorus",
+  chorus:"chorus",refrain:"chorus",hook:"chorus",drop:"chorus",main:"chorus","post-chorus":"chorus",postchorus:"chorus",
+  bridge:"bridge",transition:"bridge",trans:"bridge",
+  inst:"instrumental",instrumental:"instrumental",solo:"instrumental",interlude:"instrumental",
+  break:"breakdown",breakdown:"breakdown",quiet:"breakdown",spoken:"breakdown",
+  outro:"outro",end:"outro",fadeout:"outro","fade-out":"outro",coda:"outro",ending:"outro",
+};
+function aliasLabel(raw){
+  if(!raw) return "";
+  let k = String(raw).trim().toLowerCase().replace(/_/g," ").trim();
+  const parts = k.split(/\s+/);
+  if(parts.length>1 && /^\d+$/.test(parts[parts.length-1])) parts.pop();
+  k = parts.join("").replace(/\d+$/,"");
+  return ALIAS[k] || "";
+}
+
+const audio = document.getElementById("audio");
+const canvas = document.getElementById("wave");
+const ctx = canvas.getContext("2d");
+
+// ── App state ────────────────────────────────────────────────────────────
+let tracks = [];         // {file, name, points|null, duration, peaks, energy, decoded}
+let cur = -1;            // current track index
+let dur = 0;             // current duration (s)
+let peaks = null;        // Float32Array of [min,max] pairs per column (built on resize)
+let monoBuf = null;      // Float32Array mono @ decoded sample rate
+let sr = 44100;
+let viewStart = 0;       // left edge of the visible window (s)
+let viewSpan = 0;        // visible duration (s); === dur when zoomed all the way out
+let followPlayhead = true;
+let points = [];         // [{t, label}] sorted; points[0].t === 0 (fixed)
+let dragIdx = -1, dragMoved = false, downX = 0;
+
+// ── Persistence (per file, best-effort) ──────────────────────────────────
+function keyFor(t){ return "structlabel:" + t.name + ":" + t.file.size; }
+function saveLocal(){
+  if(cur<0) return;
+  try { localStorage.setItem(keyFor(tracks[cur]), JSON.stringify(points)); } catch(e){}
+}
+function loadLocal(t){
+  try { const s = localStorage.getItem(keyFor(t)); if(s) return JSON.parse(s); } catch(e){}
+  return null;
+}
+
+// ── Track loading ────────────────────────────────────────────────────────
+function addFiles(fileList){
+  const before = tracks.length;
+  for(const f of fileList){
+    if(!/audio|\.(mp3|wav|flac|m4a|aac|aif|aiff|ogg|opus)$/i.test(f.type + " " + f.name)) continue;
+    tracks.push({ file:f, name:f.name, points:null, duration:0, decoded:false });
+  }
+  renderQueue();
+  if(cur<0 && tracks.length>before) selectTrack(before);
+  else if(cur<0 && tracks.length) selectTrack(0);
+}
+
+async function selectTrack(i){
+  if(i<0 || i>=tracks.length) return;
+  audio.pause();
+  cur = i;
+  const t = tracks[i];
+  document.getElementById("empty").hidden = true;
+  document.getElementById("editor").hidden = false;
+  document.getElementById("trackName").textContent = t.name;
+  document.getElementById("trackMeta").textContent = "decoding…";
+  setStatus("");
+  renderQueue();
+
+  audio.src = URL.createObjectURL(t.file);
+
+  // Decode for waveform + energy (once per track).
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const ac = new AC();
+    const arr = await t.file.arrayBuffer();
+    const buf = await ac.decodeAudioData(arr);
+    sr = buf.sampleRate;
+    dur = buf.duration;
+    t.duration = dur;
+    monoBuf = downmix(buf);
+    ac.close();
+  } catch(e){
+    document.getElementById("trackMeta").textContent = "decode failed: " + e.message;
+    return;
+  }
+
+  document.getElementById("trackMeta").textContent =
+    fmt(dur) + " · " + Math.round(sr/1000) + " kHz";
+
+  // Restore saved points, else propose from energy.
+  const saved = t.points || loadLocal(t);
+  if(saved && saved.length){ points = saved.map(p=>({t:+p.t, label:p.label||""})); }
+  else { points = proposeBoundaries(+document.getElementById("sens").value); }
+  ensurePoints();
+  t.points = points;
+
+  viewStart = 0; viewSpan = dur;   // start fully zoomed out
+  resizeCanvas();
+  updateScroll();
+  renderSegments();
+  draw();
+}
+
+function downmix(buf){
+  const n = buf.length, chs = buf.numberOfChannels;
+  const out = new Float32Array(n);
+  for(let c=0;c<chs;c++){ const d = buf.getChannelData(c); for(let i=0;i<n;i++) out[i]+=d[i]; }
+  const inv = 1/chs; for(let i=0;i<n;i++) out[i]*=inv;
+  return out;
+}
+
+// ── Energy-based boundary proposal ───────────────────────────────────────
+// Short-time RMS energy (dB), smoothed, then a step-novelty comparing mean
+// energy of the seconds before vs after each frame. Peaks in that novelty are
+// candidate section boundaries (drops, breakdowns, intro→verse, etc.).
+function computeEnergyDb(){
+  const frame = Math.max(1, Math.floor(0.1 * sr));  // 100 ms
+  const nf = Math.floor(monoBuf.length / frame);
+  const e = new Float32Array(nf);
+  for(let f=0; f<nf; f++){
+    let s=0; const off=f*frame;
+    for(let i=0;i<frame;i++){ const v=monoBuf[off+i]; s+=v*v; }
+    e[f] = 10*Math.log10(s/frame + 1e-9);
+  }
+  return { e, fps: sr/frame };
+}
+function smooth(arr, win){
+  const n=arr.length, out=new Float32Array(n), half=win>>1;
+  let acc=0; for(let i=0;i<Math.min(win,n);i++) acc+=arr[i];
+  for(let i=0;i<n;i++){
+    const lo=Math.max(0,i-half), hi=Math.min(n-1,i+half);
+    let s=0; for(let j=lo;j<=hi;j++) s+=arr[j]; out[i]=s/(hi-lo+1);
+  }
+  return out;
+}
+function proposeBoundaries(sens){
+  if(!monoBuf) return [{t:0,label:"intro"}];
+  const {e, fps} = computeEnergyDb();
+  const es = smooth(e, Math.max(3, Math.round(fps*0.6)));  // ~0.6s smoothing
+  const look = Math.max(2, Math.round(fps*3.5));           // compare ±3.5s
+  const nov = new Float32Array(es.length);
+  for(let i=0;i<es.length;i++){
+    const a0=Math.max(0,i-look), b1=Math.min(es.length-1,i+look);
+    let before=0,bn=0,after=0,an=0;
+    for(let j=a0;j<i;j++){ before+=es[j]; bn++; }
+    for(let j=i+1;j<=b1;j++){ after+=es[j]; an++; }
+    nov[i] = (bn&&an) ? Math.abs(after/an - before/bn) : 0;
+  }
+  // Threshold in dB from the sensitivity slider (higher slider = fewer, bigger).
+  const thr = 13 - sens;                 // sens 1..12 -> thr 12..1 dB
+  const minGap = Math.round(fps*6);      // ≥6 s between boundaries
+  const bounds = [0];
+  let last = -1e9;
+  for(let i=1;i<nov.length-1;i++){
+    if(nov[i]>=thr && nov[i]>=nov[i-1] && nov[i]>=nov[i+1] && (i-last)>=minGap){
+      const t = i/fps;
+      if(t>2 && t<dur-2){ bounds.push(t); last=i; }
+    }
+  }
+  // Build points; first=intro, last segment=outro as a starting guess.
+  const pts = bounds.map((t,ix)=>({t, label: ix===0 ? "intro" : ""}));
+  if(pts.length>1) pts[pts.length-1].label = "outro";
+  return pts;
+}
+
+function ensurePoints(){
+  if(!points.length || points[0].t!==0){
+    points.unshift({t:0, label:"intro"});
+  }
+  points.sort((a,b)=>a.t-b.t);
+  // de-dup near-identical
+  points = points.filter((p,i)=> i===0 || p.t - points[i-1].t > 0.05);
+}
+
+// ── Segment table ────────────────────────────────────────────────────────
+function segEnd(i){ return i+1<points.length ? points[i+1].t : dur; }
+function renderSegments(){
+  const body = document.getElementById("segBody");
+  body.innerHTML = "";
+  points.forEach((p,i)=>{
+    const tr = document.createElement("tr");
+    tr.dataset.i = i;
+    const end = segEnd(i);
+    tr.innerHTML =
+      `<td class="sw"><span style="background:${LABEL_COLOR[p.label]||'var(--c-blank)'}"></span></td>`+
+      `<td>${i+1}</td>`+
+      `<td class="link" data-seek="${p.t}">${fmt(p.t)}</td>`+
+      `<td>${fmt(end)}</td>`+
+      `<td>${fmt(end-p.t)}</td>`+
+      `<td></td>`+
+      `<td>${i>0 ? '<span class="del" data-del="'+i+'">✕</span>' : ''}</td>`;
+    const sel = document.createElement("select");
+    sel.className = "lab";
+    sel.innerHTML = `<option value="">— unlabeled —</option>` +
+      VOCAB.map(v=>`<option value="${v}">${v}</option>`).join("");
+    sel.value = p.label || "";
+    sel.addEventListener("change", ()=>{ p.label = sel.value; saveLocal(); renderSegments(); draw(); });
+    tr.children[5].appendChild(sel);
+    body.appendChild(tr);
+  });
+  body.querySelectorAll("[data-seek]").forEach(el=>el.addEventListener("click",()=>{ audio.currentTime=+el.dataset.seek; }));
+  body.querySelectorAll("[data-del]").forEach(el=>el.addEventListener("click",()=>{ removePoint(+el.dataset.del); }));
+  highlightCurrentSeg();
+}
+function highlightCurrentSeg(){
+  const i = segAt(audio.currentTime||0);
+  document.querySelectorAll("#segBody tr").forEach(tr=>tr.classList.toggle("cur", +tr.dataset.i===i));
+}
+function segAt(t){
+  let idx=0; for(let i=0;i<points.length;i++){ if(points[i].t<=t) idx=i; else break; } return idx;
+}
+
+// ── Canvas rendering ─────────────────────────────────────────────────────
+function resizeCanvas(){
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.floor(rect.width*dpr));
+  canvas.height = Math.max(1, Math.floor(rect.height*dpr));
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  buildPeaks(Math.floor(rect.width));
+}
+function buildPeaks(cols){
+  if(!monoBuf || viewSpan<=0){ peaks=null; return; }
+  peaks = new Float32Array(cols*2);
+  const i0 = Math.max(0, Math.floor(viewStart*sr));
+  const i1 = Math.min(monoBuf.length, Math.ceil((viewStart+viewSpan)*sr));
+  const per = Math.max(1, (i1-i0)/cols);
+  for(let x=0;x<cols;x++){
+    const s=i0+Math.floor(x*per), e=Math.min(i1, i0+Math.floor((x+1)*per));
+    let mn=1, mx=-1;
+    for(let i=s;i<e;i+=1){ const v=monoBuf[i]; if(v<mn)mn=v; if(v>mx)mx=v; }
+    if(mn>mx){ mn=0; mx=0; }
+    peaks[x*2]=mn; peaks[x*2+1]=mx;
+  }
+}
+
+// ── Zoom / pan ───────────────────────────────────────────────────────────
+function clampView(){
+  const minSpan = Math.min(2, dur || 2);
+  viewSpan = Math.max(minSpan, Math.min(dur, viewSpan || dur));
+  viewStart = Math.max(0, Math.min(dur - viewSpan, viewStart));
+}
+function rebuildAndDraw(){ resizeCanvas(); draw(); updateScroll(); }
+function zoomAt(centerT, factor){
+  if(!dur) return;
+  const frac = viewSpan>0 ? (centerT - viewStart)/viewSpan : 0.5;
+  let ns = viewSpan / factor;
+  ns = Math.max(Math.min(2,dur), Math.min(dur, ns));
+  viewStart = centerT - frac*ns;
+  viewSpan = ns;
+  clampView(); rebuildAndDraw();
+}
+function panBy(ds){ viewStart += ds; clampView(); rebuildAndDraw(); }
+function fitView(){ viewStart=0; viewSpan=dur; clampView(); rebuildAndDraw(); }
+function updateScroll(){
+  const thumb = document.getElementById("scrollThumb");
+  if(!thumb || !dur){ return; }
+  const track = document.getElementById("scrollTrack").getBoundingClientRect().width;
+  const w = Math.max(24, viewSpan/dur*track);
+  const left = (dur>viewSpan) ? viewStart/(dur-viewSpan)*(track-w) : 0;
+  thumb.style.width = w+"px";
+  thumb.style.left = left+"px";
+}
+function css(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+function draw(){
+  const rect = canvas.getBoundingClientRect();
+  const W=rect.width, H=rect.height, mid=H/2;
+  ctx.clearRect(0,0,W,H);
+  if(!peaks) return;
+
+  // Segment tints (clipped to the visible window)
+  for(let i=0;i<points.length;i++){
+    let x0 = tx(points[i].t), x1 = tx(segEnd(i));
+    if(x1<0 || x0>W) continue;
+    x0 = Math.max(0,x0); x1 = Math.min(W,x1);
+    ctx.fillStyle = tint(points[i].label);
+    ctx.fillRect(x0,0,x1-x0,H);
+  }
+  // Waveform
+  ctx.strokeStyle = css("--accent"); ctx.globalAlpha=0.9; ctx.lineWidth=1; ctx.beginPath();
+  const cols = peaks.length/2;
+  for(let x=0;x<cols;x++){
+    const mn=peaks[x*2], mx=peaks[x*2+1];
+    ctx.moveTo(x+0.5, mid - mx*mid*0.92);
+    ctx.lineTo(x+0.5, mid - mn*mid*0.92);
+  }
+  ctx.stroke(); ctx.globalAlpha=1;
+
+  // Boundary lines + labels
+  ctx.font = "11px system-ui"; ctx.textBaseline="top";
+  for(let i=0;i<points.length;i++){
+    const x = tx(points[i].t);
+    if(x<-60 || x>W+2) continue;
+    if(i>0){
+      ctx.strokeStyle = "#e9edf2"; ctx.lineWidth=2; ctx.beginPath();
+      ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
+    }
+    const lab = points[i].label;
+    if(lab && x<W){
+      ctx.fillStyle = "#0c0f14cc";
+      ctx.fillRect(Math.max(0,x)+3, 4, ctx.measureText(lab).width+10, 16);
+      ctx.fillStyle = solid(lab);
+      ctx.fillText(lab, Math.max(0,x)+8, 6);
+    }
+  }
+  // Playhead
+  const px = tx(audio.currentTime||0);
+  ctx.strokeStyle = css("--accent2"); ctx.lineWidth=1.5; ctx.beginPath();
+  ctx.moveTo(px,0); ctx.lineTo(px,H); ctx.stroke();
+}
+function tint(label){
+  const map = { "":"rgba(255,255,255,0.02)", intro:"rgba(107,114,128,.14)", verse:"rgba(59,130,246,.14)",
+    prechorus:"rgba(139,92,246,.14)", chorus:"rgba(239,68,68,.16)", bridge:"rgba(20,184,166,.14)",
+    instrumental:"rgba(245,158,11,.14)", breakdown:"rgba(100,116,139,.14)", outro:"rgba(120,113,108,.16)" };
+  return map[label] || map[""];
+}
+function solid(label){ return css(LABEL_COLOR[label] ? LABEL_COLOR[label].replace("var(","").replace(")","") : "--text"); }
+
+// ── Boundary editing on canvas ───────────────────────────────────────────
+function tx(t){ return (t-viewStart)/viewSpan*canvas.getBoundingClientRect().width; }
+function xToTime(clientX){
+  const rect = canvas.getBoundingClientRect();
+  return Math.max(0, Math.min(dur, viewStart + (clientX-rect.left)/rect.width*viewSpan));
+}
+function nearestBoundary(clientX){
+  const rect = canvas.getBoundingClientRect();
+  let best=-1, bestPx=8;
+  for(let i=1;i<points.length;i++){
+    const x = rect.left + tx(points[i].t);
+    const d = Math.abs(clientX-x);
+    if(d<bestPx){ bestPx=d; best=i; }
+  }
+  return best;
+}
+canvas.addEventListener("mousedown", e=>{
+  if(e.button!==0) return;
+  downX = e.clientX; dragMoved=false;
+  dragIdx = nearestBoundary(e.clientX);
+});
+window.addEventListener("mousemove", e=>{
+  if(dragIdx<0) return;
+  if(Math.abs(e.clientX-downX)>2) dragMoved=true;
+  const t = xToTime(e.clientX);
+  const lo = points[dragIdx-1].t + 0.1;
+  const hi = (dragIdx+1<points.length ? points[dragIdx+1].t : dur) - 0.1;
+  points[dragIdx].t = Math.max(lo, Math.min(hi, t));
+  draw();
+});
+window.addEventListener("mouseup", e=>{
+  if(dragIdx>=0){
+    if(dragMoved){ saveLocal(); renderSegments(); }
+    else { audio.currentTime = xToTime(e.clientX); } // click on/near line = seek
+    dragIdx=-1; return;
+  }
+});
+canvas.addEventListener("click", e=>{
+  if(dragMoved) { dragMoved=false; return; }
+  if(nearestBoundary(e.clientX)>=0) return; // handled by mouseup
+  audio.currentTime = xToTime(e.clientX);
+});
+canvas.addEventListener("dblclick", e=>{ addPointAt(xToTime(e.clientX)); });
+canvas.addEventListener("contextmenu", e=>{
+  const i = nearestBoundary(e.clientX);
+  if(i>=0){ e.preventDefault(); removePoint(i); }
+});
+canvas.addEventListener("wheel", e=>{
+  if(!dur) return;
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  if(e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)){
+    panBy(((e.deltaX || e.deltaY))/rect.width * viewSpan);
+  } else {
+    zoomAt(xToTime(e.clientX), e.deltaY < 0 ? 1.25 : 1/1.25);
+  }
+}, {passive:false});
+
+function addPointAt(t){
+  if(t<=0.1 || t>=dur-0.1) return;
+  const prev = segAt(t);
+  points.splice(prev+1, 0, {t, label:""});
+  ensurePoints(); saveLocal(); renderSegments(); draw();
+}
+function removePoint(i){
+  if(i<=0 || i>=points.length) return;
+  points.splice(i,1);
+  saveLocal(); renderSegments(); draw();
+}
+
+// ── Playback / clock ─────────────────────────────────────────────────────
+function tick(){
+  const c = audio.currentTime||0;
+  document.getElementById("clock").textContent = fmt(c)+" / "+fmt(dur||0);
+  if(!audio.paused){
+    // Auto-follow: when the playhead leaves the zoomed window, page forward so
+    // it re-enters near the left edge (cheap — only rebuilds on the jump).
+    if(followPlayhead && viewSpan < dur && (c < viewStart || c > viewStart+viewSpan)){
+      viewStart = c - viewSpan*0.1; clampView(); resizeCanvas(); updateScroll();
+    }
+    draw(); highlightCurrentSeg();
+  }
+  requestAnimationFrame(tick);
+}
+audio.addEventListener("play", ()=>{ document.getElementById("playBtn").textContent="❚❚ Pause"; });
+audio.addEventListener("pause", ()=>{ document.getElementById("playBtn").textContent="▶ Play"; });
+audio.addEventListener("seeked", ()=>{ draw(); highlightCurrentSeg(); document.getElementById("clock").textContent=fmt(audio.currentTime)+" / "+fmt(dur||0); });
+
+// ── Export ───────────────────────────────────────────────────────────────
+function record(){
+  const t = tracks[cur];
+  return {
+    path: t.name,
+    duration: +dur.toFixed(3),
+    segments: points.map((p,i)=>({ start:+p.t.toFixed(3), end:+segEnd(i).toFixed(3), label: p.label||"" })),
+  };
+}
+async function saveJSON(){
+  if(cur<0) return;
+  const rec = record();
+  const text = JSON.stringify(rec, null, 2);
+  const base = tracks[cur].name.replace(/\.[^.]+$/,"") + ".json";
+  // File System Access API (Chrome) — save next to where the user chooses.
+  if(window.showSaveFilePicker){
+    try {
+      const h = await window.showSaveFilePicker({ suggestedName: base,
+        types:[{description:"JSON", accept:{"application/json":[".json"]}}] });
+      const w = await h.createWritable(); await w.write(text); await w.close();
+      setStatus("saved "+base); return;
+    } catch(e){ if(e.name==="AbortError") return; /* fall through */ }
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], {type:"application/json"}));
+  a.download = base; a.click();
+  setStatus("downloaded "+base);
+}
+async function copyJSON(){
+  if(cur<0) return;
+  try { await navigator.clipboard.writeText(JSON.stringify(record(), null, 2)); setStatus("copied JSON"); }
+  catch(e){ setStatus("copy failed"); }
+}
+function importJSON(file){
+  const r = new FileReader();
+  r.onload = ()=>{
+    try {
+      const rec = JSON.parse(r.result);
+      const segs = rec.segments || rec || [];
+      if(!Array.isArray(segs) || !segs.length){ setStatus("no segments in JSON"); return; }
+      points = segs.map(s=>({ t:+ (s.start ?? s[0]), label: aliasLabel(s.label ?? s[2]) }));
+      ensurePoints();
+      if(cur>=0) tracks[cur].points = points;
+      saveLocal(); renderSegments(); draw();
+      setStatus("imported "+segs.length+" segments (labels mapped to our vocab)");
+    } catch(e){ setStatus("bad JSON: "+e.message); }
+  };
+  r.readAsText(file);
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────
+function fmt(s){ s=Math.max(0,s||0); const m=Math.floor(s/60), ss=Math.floor(s%60); return m+":"+String(ss).padStart(2,"0"); }
+function setStatus(m){ document.getElementById("statusMsg").textContent = m; }
+function renderQueue(){
+  const q = document.getElementById("queue");
+  if(!tracks.length){ q.textContent=""; return; }
+  q.innerHTML = `<b>${cur+1}</b>/<span>${tracks.length}</span>&nbsp;tracks`;
+  document.getElementById("prevBtn").disabled = cur<=0;
+  document.getElementById("nextBtn").disabled = cur>=tracks.length-1;
+}
+
+// ── Wiring ───────────────────────────────────────────────────────────────
+document.getElementById("fileInput").addEventListener("change", e=>{ addFiles(e.target.files); e.target.value=""; });
+document.getElementById("jsonInput").addEventListener("change", e=>{ if(e.target.files[0]) importJSON(e.target.files[0]); e.target.value=""; });
+document.getElementById("prevBtn").addEventListener("click", ()=>selectTrack(cur-1));
+document.getElementById("nextBtn").addEventListener("click", ()=>selectTrack(cur+1));
+document.getElementById("saveBtn").addEventListener("click", saveJSON);
+document.getElementById("copyBtn").addEventListener("click", copyJSON);
+document.getElementById("playBtn").addEventListener("click", ()=>{ audio.paused ? audio.play() : audio.pause(); });
+document.getElementById("reproposeBtn").addEventListener("click", ()=>{
+  points = proposeBoundaries(+document.getElementById("sens").value);
+  ensurePoints(); if(cur>=0) tracks[cur].points=points; saveLocal(); renderSegments(); draw();
+  setStatus("re-proposed "+points.length+" boundaries");
+});
+document.getElementById("clearBtn").addEventListener("click", ()=>{
+  points = [{t:0, label:points[0]?.label||"intro"}]; if(cur>=0) tracks[cur].points=points;
+  saveLocal(); renderSegments(); draw();
+});
+document.getElementById("zoomInBtn").addEventListener("click", ()=>zoomAt(viewStart+viewSpan/2, 1.5));
+document.getElementById("zoomOutBtn").addEventListener("click", ()=>zoomAt(viewStart+viewSpan/2, 1/1.5));
+document.getElementById("fitBtn").addEventListener("click", fitView);
+document.getElementById("followChk").addEventListener("change", e=>{ followPlayhead = e.target.checked; });
+
+// Scrollbar drag → pan
+(function(){
+  const track = document.getElementById("scrollTrack");
+  const thumb = document.getElementById("scrollThumb");
+  let drag=false, offX=0;
+  thumb.addEventListener("mousedown", e=>{ drag=true; offX = e.clientX - thumb.getBoundingClientRect().left; e.preventDefault(); });
+  window.addEventListener("mousemove", e=>{
+    if(!drag || !dur) return;
+    const tr = track.getBoundingClientRect();
+    const w = thumb.getBoundingClientRect().width;
+    const left = Math.max(0, Math.min(tr.width - w, e.clientX - tr.left - offX));
+    viewStart = (tr.width - w) > 0 ? left/(tr.width - w)*(dur - viewSpan) : 0;
+    clampView(); resizeCanvas(); draw(); updateScroll();
+  });
+  window.addEventListener("mouseup", ()=>{ drag=false; });
+  track.addEventListener("mousedown", e=>{ // click on track jumps
+    if(e.target!==track || !dur) return;
+    const tr = track.getBoundingClientRect();
+    viewStart = (e.clientX - tr.left)/tr.width*dur - viewSpan/2;
+    clampView(); resizeCanvas(); draw(); updateScroll();
+  });
+})();
+
+// Drag & drop anywhere
+["dragenter","dragover"].forEach(ev=>document.addEventListener(ev,e=>{
+  e.preventDefault(); document.getElementById("empty").classList.add("drag");
+}));
+["dragleave","drop"].forEach(ev=>document.addEventListener(ev,e=>{
+  if(ev==="dragleave" && e.relatedTarget) return;
+  document.getElementById("empty").classList.remove("drag");
+}));
+document.addEventListener("drop", e=>{ e.preventDefault(); if(e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
+
+// Keyboard
+document.addEventListener("keydown", e=>{
+  if(e.target.tagName==="SELECT" || e.target.tagName==="INPUT") return;
+  if(e.key===" "){ e.preventDefault(); audio.paused?audio.play():audio.pause(); }
+  else if(e.key==="ArrowRight"){ audio.currentTime=Math.min(dur, audio.currentTime+2); }
+  else if(e.key==="ArrowLeft"){ audio.currentTime=Math.max(0, audio.currentTime-2); }
+  else if(e.key==="b"||e.key==="B"){ addPointAt(audio.currentTime); }
+  else if(e.key==="Delete"||e.key==="Backspace"){
+    // remove the boundary nearest the playhead (never index 0)
+    let best=-1,bd=1e9; for(let i=1;i<points.length;i++){ const d=Math.abs(points[i].t-audio.currentTime); if(d<bd){bd=d;best=i;} }
+    if(best>0) removePoint(best);
+  }
+  else if(e.key>="1" && e.key<="8"){
+    const i = segAt(audio.currentTime); if(i>=0){ points[i].label = VOCAB[+e.key-1]; saveLocal(); renderSegments(); draw(); }
+  }
+  else if(e.key==="["){ selectTrack(cur-1); }
+  else if(e.key==="]"){ selectTrack(cur+1); }
+  else if(e.key==="+"||e.key==="="){ zoomAt(audio.currentTime||viewStart+viewSpan/2, 1.5); }
+  else if(e.key==="-"||e.key==="_"){ zoomAt(audio.currentTime||viewStart+viewSpan/2, 1/1.5); }
+  else if(e.key==="f"||e.key==="F"){ fitView(); }
+});
+
+window.addEventListener("resize", ()=>{ if(cur>=0){ resizeCanvas(); draw(); updateScroll(); } });
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
