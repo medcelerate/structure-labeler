@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Structure Labeler</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#1c2027">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <style>
   :root {
     --bg: #14161a; --panel: #1c2027; --panel2: #232833; --line: #2f3742;
@@ -910,6 +914,11 @@ document.addEventListener("keydown", e=>{
 
 window.addEventListener("resize", ()=>{ if(cur>=0){ resizeCanvas(); draw(); updateScroll(); } });
 autoloadManifest();
+// Offline: the hosted copy ships sw.js, which caches this page after one online
+// visit. Where there's no sw.js (label_server.py, a local file) this quietly fails.
+if("serviceWorker" in navigator && location.protocol!=="file:"){
+  navigator.serviceWorker.register("sw.js").catch(()=>{});
+}
 requestAnimationFrame(tick);
 </script>
 </body>
